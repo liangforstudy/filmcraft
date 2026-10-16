@@ -1140,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn a_divider_shrinks_what_it_moves_into_then_pushes_past_it() {
+    fn divider_shrinks_then_pushes() {
         // Project | Tools | Timeline | Meters
         let sizes = [300.0, 64.0, 600.0, 116.0];
         let mins = [PANEL_MIN; 4];
@@ -1162,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn a_strip_below_its_minimum_takes_room_from_the_nearest_panel() {
+    fn strip_below_min_takes_room_from_nearest() {
         let strips = [false, true, false, true];
         // Tools needs a second column: the Timeline after it gives the room, not the Meters
         assert_eq!(fit_minimums(&[300.0, 64.0, 600.0, 116.0], &[40.0, 100.0, 40.0, 40.0], &strips), [300.0, 100.0, 564.0, 116.0]);
@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_tools_strip_widens_to_show_another_column() {
+    fn tools_strip_widens_adds_column() {
         let t = Tokens::for_kind(crate::theme::ThemeKind::Dark);
         let row = |h: f32| {
             let mut node = hsplit(SplitSize::FixedA(64.0), tabs(&[PanelKind::Tools], 0), tabs(&[PanelKind::Timeline], 0));
@@ -1185,12 +1185,18 @@ mod tests {
             fit_minimums(&tree, &mins, &[true, false])[0]
         };
         assert_eq!(row(600.0), 64.0);
-        // the Timeline keeps its track headers and scrollbar
-        let timeline = min_extent(&tabs(&[PanelKind::Timeline], 0), Rect::from_min_size(egui::Pos2::ZERO, vec2(500.0, 300.0)), false, &t);
-        assert_eq!(timeline, 204.0 + 17.0);
-        assert_eq!(min_extent(&tabs(&[PanelKind::Timeline], 0), Rect::from_min_size(egui::Pos2::ZERO, vec2(500.0, 300.0)), true, &t), PANEL_MIN);
         assert_eq!(row(200.0), crate::panels::tools::width_for(192.0));
         assert!(row(200.0) > 64.0 && row(100.0) > row(200.0));
+    }
+
+    #[test]
+    fn timeline_min_keeps_track_headers() {
+        let t = Tokens::for_kind(crate::theme::ThemeKind::Dark);
+        let timeline = tabs(&[PanelKind::Timeline], 0);
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(500.0, 300.0));
+        // its track headers and scrollbar stay in view; its height has the usual minimum
+        assert_eq!(min_extent(&timeline, rect, false, &t), 204.0 + 17.0);
+        assert_eq!(min_extent(&timeline, rect, true, &t), PANEL_MIN);
     }
 
     /// Every way of nesting `panels` into splits side by side; strips get their fixed size.
@@ -1231,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn every_arrangement_shrinks_then_pushes_however_the_splits_nest() {
+    fn every_arrangement_shrinks_then_pushes() {
         use PanelKind::*;
         let t = Tokens::for_kind(crate::theme::ThemeKind::Dark);
         let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 600.0));
