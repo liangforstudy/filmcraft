@@ -29,13 +29,17 @@ pub fn min_width() -> f32 {
     BUTTON + 16.0
 }
 
+/// Draw the Tools panel in `rect`: its tools in as many columns as fit, scrolling the rest.
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     // the columns the height needs when the width has room for them, else the ones that fit
     let fit = ((rect.width() - min_width()) / CELL).floor().max(0.0) as usize + 1;
     let cols = columns(rect.height()).min(fit).max(1);
     let rows = Tool::groups().len().div_ceil(cols);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    egui::ScrollArea::vertical().id_salt("tools-panel").max_height(rect.height().max(0.0)).auto_shrink([false, false]).show(&mut child, |ui| {
+    // egui keeps a scroll area at least 64 points tall unless told otherwise; in a shorter panel
+    // the bottom of it would be clipped and the last tool could not be scrolled into view
+    let height = rect.height().max(0.0);
+    egui::ScrollArea::vertical().id_salt("tools-panel").max_height(height).min_scrolled_height(height).auto_shrink([false, false]).show(&mut child, |ui| {
         let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * CELL + 4.0), Sense::hover());
         grid(app, ui, area, cols, rows);
     });
@@ -134,6 +138,7 @@ mod tests {
         min_width() + (columns(height) - 1) as f32 * CELL
     }
 
+    /// One frame of the panel, 42 points wide and `height` tall, with `events`.
     fn frame_at_height(app: &mut FilmcraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>, height: f32) {
         app.auto.begin_frame();
         let mut out = ctx.run_ui(
@@ -143,15 +148,18 @@ mod tests {
         out.textures_delta.clear();
     }
 
+    /// One frame of a panel tall enough for every tool.
     fn frame(app: &mut FilmcraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
         frame_at_height(app, ctx, time, events, 700.0);
     }
 
+    /// The centre of the automation element `id`, if it was registered this frame.
     fn center_of(app: &FilmcraftApp, id: &str) -> Option<egui::Pos2> {
         let [x, y, w, h] = app.auto.elements.iter().find(|w| w.id == id)?.rect;
         Some(egui::pos2(x + w / 2.0, y + h / 2.0))
     }
 
+    /// A primary button press or release at `pos`.
     fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
         egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
     }
@@ -199,6 +207,26 @@ mod tests {
         frame_at_height(&mut app, &ctx, 0.3, vec![], 160.0);
         let after = center_of(&app, "tools.Type");
         assert!(after.is_some_and(|p| (0.0..160.0).contains(&p.y)), "mouse wheel must bring the last tool into view: {after:?}");
+    }
+
+    #[test]
+    fn the_last_tool_scrolls_into_a_panel_shorter_than_a_scroll_area() {
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &app.tokens);
+        // the dock lets Tools shrink to 40 points: 32 for the buttons under its grip
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -2000.0),
+            modifiers: Default::default(),
+            phase: egui::TouchPhase::Move,
+        };
+        frame_at_height(&mut app, &ctx, 0.0, vec![], 32.0);
+        frame_at_height(&mut app, &ctx, 0.1, vec![egui::Event::PointerMoved(pos2(21.0, 16.0)), wheel], 32.0);
+        frame_at_height(&mut app, &ctx, 0.5, vec![], 32.0);
+        let [_, y, _, h] = app.auto.elements.iter().find(|e| e.id == "tools.Type").expect("the Type tool is registered").rect;
+        // its bottom reaches the panel (only the top margin is left above a 32 point panel)
+        assert!(y + h <= 32.0 && y + h > 24.0, "scrolled to the end, the last tool is in view: {y}..{}", y + h);
     }
 
     #[test]
