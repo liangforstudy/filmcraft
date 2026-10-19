@@ -72,9 +72,12 @@ pub const HUNG_DIR: &str = "graphics-hung";
 pub const DEATH_WINDOW: Duration = Duration::from_secs(15);
 /// Failed starts in a row, in the same mode, that move on to the next mode.
 pub const FAILURES_TO_MOVE_ON: u32 = 2;
-/// How long after launch the graphics device may take before the start counts as hung. Creating
-/// it takes a second or two; a cold start from a slow disk well under this.
-pub const HANG_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long after launch the graphics device may take before the start counts as hung. On the
+/// laptop this was tested on, the slowest working start seen took 9 s from launch to choosing an
+/// adapter (a cold start), and the hung ones never got further in minutes. A start that is only
+/// slow and passes this costs a saved downgrade (the notice offers the way back), never the
+/// process: its marker goes once the device is there ([`GraphicsStart::device_ready`]).
+pub const HANG_TIMEOUT: Duration = Duration::from_secs(60);
 /// Attempt files looked at per launch; anything beyond is left for a later launch.
 const MAX_ATTEMPTS: usize = 64;
 /// The state and attempt files are a few bytes; anything longer is not ours.
@@ -437,10 +440,20 @@ impl GraphicsStart {
         }
     }
 
-    /// The graphics device exists (eframe is creating the app): this start did not hang, however
-    /// long the app itself then takes to open a project and paint.
+    /// The graphics device exists (eframe is creating the app), or the start is over: this start
+    /// did not hang, however long the app itself then takes to open a project and paint. A
+    /// [`HUNG_DIR`] marker the watchdog already left for a slow start goes, so no later launch
+    /// ends this process.
     pub fn device_ready(&self) {
         self.ready.store(true, Ordering::Relaxed);
+        if let Some(marker) = self.own_marker() {
+            remove_quietly(&marker);
+        }
+    }
+
+    /// This process's [`HUNG_DIR`] marker, written only when the watchdog finds it stuck.
+    fn own_marker(&self) -> Option<PathBuf> {
+        Some(self.state.as_deref()?.parent()?.join(HUNG_DIR).join(format!("{}.json", self.pid)))
     }
 
     /// After [`HANG_TIMEOUT`], save the next mode for the next launch if the graphics device still
@@ -468,10 +481,14 @@ impl GraphicsStart {
             return None;
         }
         // stuck whatever the mode: the next launch ends this process
-        if let Some(dir) = self.state.as_deref().and_then(Path::parent) {
-            let marker = dir.join(HUNG_DIR).join(format!("{}.json", self.pid));
+        if let Some(marker) = self.own_marker() {
             if let Err(e) = write_atomic(&marker, &hung_json(self.launched)) {
                 log::warn!("can't write {}: {e}", marker.display());
+            }
+            // the device may have come up while the marker was written: never leave it then
+            if self.ready.load(Ordering::Relaxed) {
+                remove_quietly(&marker);
+                return None;
             }
         }
         let secs = HANG_TIMEOUT.as_secs();
@@ -1049,6 +1066,23 @@ mod tests {
         assert_eq!(fine.hung(), None);
         let _ = GraphicsStart::begin_at(Some(&dir), true, None, NOW + 3, 203).hung();
         assert!(!hung(202) && !hung(203));
+        // a start that was only slow (#1808 review): its marker goes once the device is there, or
+        // when it ends normally, so no later launch ends a working FilmCraft
+        let slow = launch(&dir, 210, NOW + 4);
+        let _ = slow.clone().hung();
+        assert!(hung(210));
+        slow.device_ready();
+        assert!(!hung(210));
+        let closed = launch(&dir, 211, NOW + 5);
+        let _ = closed.hung();
+        assert!(hung(211));
+        closed.finish();
+        assert!(!hung(211));
+        // once the device is there the watchdog leaves no marker at all
+        let late = launch(&dir, 212, NOW + 6);
+        late.device_ready();
+        assert_eq!(late.hung(), None);
+        assert!(!hung(212));
         // debris, and a marker with the next launch's own id (a dead process whose id was reused)
         let _ = std::fs::write(dir.join(HUNG_DIR).join("junk.json"), "{");
         let _ = std::fs::write(dir.join(HUNG_DIR).join("204.json"), hung_json(NOW));
