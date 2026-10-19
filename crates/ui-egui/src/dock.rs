@@ -532,24 +532,22 @@ fn is_strip(node: &DockNode) -> bool {
 
 /// The narrowest a panel gets before a drag pushes past it.
 const PANEL_MIN: f32 = 40.0;
+/// The narrowest the Tools strip gets: its 32 point buttons with 8 points either side.
+const TOOLS_MIN: f32 = 48.0;
 
 fn split_axis(vertical: bool) -> SplitAxis {
     if vertical { SplitAxis::Vertical } else { SplitAxis::Horizontal }
 }
 
 /// The smallest extent of `node` laid out in `rect`, along the height when `vertical`, else the width.
-/// Tools needs the width of as many columns as its height takes.
+/// The Timeline keeps its track headers in view, Tools one column of buttons.
 fn min_extent(node: &DockNode, rect: Rect, vertical: bool, t: &Tokens) -> f32 {
     match node {
-        DockNode::Tabs { panels, active } => {
-            let tab_h = if matches!(panels.as_slice(), [panel] if panel.compact()) { 8.0 } else { t.tab_h };
-            match panels.get(*active) {
-                Some(PanelKind::Tools) if vertical => tab_h + crate::panels::tools::min_height(),
-                Some(PanelKind::Tools) => crate::panels::tools::width_for(rect.height() - tab_h),
-                Some(PanelKind::Timeline) if !vertical => crate::panels::timeline::min_width(),
-                _ => PANEL_MIN,
-            }
-        }
+        DockNode::Tabs { panels, active } => match panels.get(*active) {
+            Some(PanelKind::Tools) if !vertical => TOOLS_MIN,
+            Some(PanelKind::Timeline) if !vertical => crate::panels::timeline::min_width(),
+            _ => PANEL_MIN,
+        },
         DockNode::Split { vertical: v, size, a, b } => {
             let Some(split) = split_rect(rect, split_axis(*v), size.shared(), t.gap, 20.0) else { return PANEL_MIN };
             let (a, b) = (min_extent(a, split.first, vertical, t), min_extent(b, split.second, vertical, t));
@@ -617,7 +615,7 @@ fn span(sizes: &[f32], lo: usize, hi: usize, gap: f32) -> f32 {
     sizes.get(lo..hi).unwrap_or_default().iter().sum::<f32>() + hi.saturating_sub(lo + 1) as f32 * gap
 }
 
-/// Grow every item below its minimum (Tools made shorter needs another column) from the others'
+/// Grow every item below its minimum (the window made smaller) from the others'
 /// room above theirs: panels before strips, the nearest first, the next one along before the one
 /// behind.
 fn fit_minimums(sizes: &[f32], mins: &[f32], strips: &[bool]) -> Vec<f32> {
@@ -667,8 +665,8 @@ fn push_divider(sizes: &[f32], mins: &[f32], k: usize, delta: f32) -> Option<Vec
 }
 
 /// The sizes to store for the splits of a run whose items went from `shown` to `sizes`. A split
-/// whose stored side didn't change keeps its value, so a strip only widened to fit (Tools showing
-/// another column) keeps the width it was given and narrows again once it can.
+/// whose stored side didn't change keeps its value, so a panel only widened to fit its minimum
+/// keeps the width it was given and narrows again once it can.
 fn write_back(splits: &[RunSplit], shown: &[f32], sizes: &[f32], gap: f32) -> Vec<(Vec<bool>, SharedSplitSize)> {
     let mut out = vec![];
     for split in splits {
@@ -1164,7 +1162,7 @@ mod tests {
     #[test]
     fn strip_below_min_takes_room_from_nearest() {
         let strips = [false, true, false, true];
-        // Tools needs a second column: the Timeline after it gives the room, not the Meters
+        // a strip below its minimum: the Timeline after it gives the room, not the Meters
         assert_eq!(fit_minimums(&[300.0, 64.0, 600.0, 116.0], &[40.0, 100.0, 40.0, 40.0], &strips), [300.0, 100.0, 564.0, 116.0]);
         // Project | Tools | Meters | Timeline: Project is the nearest panel
         assert_eq!(fit_minimums(&[300.0, 64.0, 116.0, 600.0], &[40.0, 100.0, 40.0, 40.0], &[false, true, true, false]), [264.0, 100.0, 116.0, 600.0]);
@@ -1173,20 +1171,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_strip_widens_adds_column() {
+    fn tools_min_is_one_column() {
         let t = Tokens::for_kind(crate::theme::ThemeKind::Dark);
-        let row = |h: f32| {
-            let mut node = hsplit(SplitSize::FixedA(64.0), tabs(&[PanelKind::Tools], 0), tabs(&[PanelKind::Timeline], 0));
-            let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(1000.0, h));
-            let (mut items, mut splits) = (vec![], vec![]);
-            collect_run(&mut node, false, rect, String::new(), vec![], t.gap, &mut items, &mut splits);
-            let tree: Vec<f32> = items.iter().map(|i| i.rect.width()).collect();
-            let mins: Vec<f32> = items.iter().map(|i| min_extent(&*i.node, i.rect, false, &t)).collect();
-            fit_minimums(&tree, &mins, &[true, false])[0]
-        };
-        assert_eq!(row(600.0), 64.0);
-        assert_eq!(row(200.0), crate::panels::tools::width_for(192.0));
-        assert!(row(200.0) > 64.0 && row(100.0) > row(200.0));
+        let tools = tabs(&[PanelKind::Tools], 0);
+        for h in [600.0, 100.0] {
+            let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(64.0, h));
+            assert_eq!((min_extent(&tools, rect, false, &t), min_extent(&tools, rect, true, &t)), (TOOLS_MIN, PANEL_MIN));
+        }
     }
 
     #[test]
